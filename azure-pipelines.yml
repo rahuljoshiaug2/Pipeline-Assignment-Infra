@@ -1,0 +1,167 @@
+trigger:
+- main
+
+pool: Rahul Agent Pool
+
+stages:
+  - stage: PreCommmit
+    displayName: Pre-commit
+    jobs:
+      
+      - job: TerraformValidate
+        displayName: Validate
+        steps:
+        
+        - task: TerraformInstaller@1
+          inputs:
+            terraformVersion: 'latest'
+
+        - task: TerraformTask@5
+          inputs:
+            provider: 'azurerm'
+            command: 'init'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/env/dev'
+            backendServiceArm: 'RahulServiceCon'
+            backendAzureRmStorageAccountName: 'rahulstgact02'
+            backendAzureRmContainerName: 'tfstate'
+            backendAzureRmKey: 'dev_state.tfstate'
+
+        - task: TerraformTask@5
+          inputs:
+            provider: 'azurerm'
+            command: 'validate'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/env/dev'
+
+      - job: TerraformFmt
+        displayName: Formatting
+        dependsOn: TerraformValidate
+        steps:
+        - task: TerraformTask@5
+          inputs:
+            provider: 'azurerm'
+            command: 'custom'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/env/dev'
+            outputTo: 'console'
+            customCommand: 'fmt'
+            environmentServiceNameAzureRM: 'RahulServiceCon'    
+      
+      - job: tfsec
+        displayName: static code analysis
+        dependsOn: TerraformFmt
+        steps:
+        
+        - task: tfsec@1
+          inputs:
+            version: 'v1.26.0'
+            dir: '$(System.DefaultWorkingDirectory)/env/dev'
+
+      - job: tflint
+        displayName: Lint the errors
+        dependsOn: tfsec
+        steps:
+        
+        - task: PowerShell@2
+          inputs:
+            targetType: 'inline'
+            script: |
+              winget install TerraformLinters.tflint
+              ls
+              tflint
+            errorActionPreference: 'continue'
+            warningPreference: 'continue'
+            informationPreference: 'continue'
+            verbosePreference: 'continue'
+            debugPreference: 'continue'
+            progressPreference: 'continue'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/env/dev'
+
+ 
+  - stage: Plan
+    displayName: Plan and Review Stage
+    dependsOn: PreCommmit
+    jobs:
+      - job: terraformplan
+        displayName: Terraform Plan
+       
+        steps:
+        - task: TerraformTask@5
+          inputs:
+            provider: 'azurerm'
+            command: 'init'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/env/dev'
+            backendServiceArm: 'RahulServiceCon'
+            backendAzureRmStorageAccountName: 'rahulstgact02'
+            backendAzureRmContainerName: 'tfstate'
+            backendAzureRmKey: 'dev_state.tfstate'
+
+        - task: TerraformTask@5
+          inputs:
+            provider: 'azurerm'
+            command: 'plan'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/env/dev'
+            environmentServiceNameAzureRM: 'RahulServiceCon'                   
+  
+  - stage: Costcalculations
+    displayName: Infra Cost
+    dependsOn: Plan
+    jobs:
+      
+      - job: Infracost
+        displayName: Infracost
+        steps:
+        - task: PowerShell@2
+          displayName: RUN INFRACOST
+          inputs:
+            targetType: 'inline'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/env/dev'
+            script: |
+              C:\Users\rahuljoshi\Downloads\Agent\_work\_tool\infracost.exe --version
+              C:\Users\rahuljoshi\Downloads\Agent\_work\_tool\infracost.exe breakdown --path .
+          env: 
+            INFRACOST_API_KEY: $(INFRACOST_API_KEY)
+            
+  - stage: ManualValidation
+    displayName: Approval and Governance Stage
+    dependsOn: Costcalculations
+    jobs:
+                
+      - job: ManualValidation
+        displayName: Manual check for code
+        pool: server
+        steps:
+        - task: ManualValidation@1
+          inputs:
+            notifyUsers: 'rahul@anmolkaushik13042000gmail.onmicrosoft.com'
+            approvers: 'rahul@anmolkaushik13042000gmail.onmicrosoft.com'
+            instructions: 'bina check kare na approve karna'
+
+  - stage: Apply
+    displayName: Infra Provisioning
+    dependsOn: ManualValidation
+    jobs:
+      - job: Terraformapply
+        displayName: Infra Provision
+        steps:
+         - task: TerraformTask@5
+           inputs:
+            provider: 'azurerm'
+            command: 'init'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/env/dev'
+            backendServiceArm: 'RahulServiceCon'
+            backendAzureRmStorageAccountName: 'rahulstgact02'
+            backendAzureRmContainerName: 'tfstate'
+            backendAzureRmKey: 'dev_state.tfstate'
+         - task: TerraformTask@5
+           inputs:
+             provider: 'azurerm'
+             command: 'plan'
+             workingDirectory: '$(System.DefaultWorkingDirectory)/env/dev'
+             environmentServiceNameAzureRM: 'RahulServiceCon'
+
+         - task: TerraformTask@5
+           inputs:
+             provider: 'azurerm'
+             command: 'apply'
+             workingDirectory: '$(System.DefaultWorkingDirectory)/env/dev'
+             environmentServiceNameAzureRM: 'RahulServiceCon'
+        
